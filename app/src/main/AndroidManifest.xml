@@ -50,12 +50,16 @@
                 <category android:name="android.intent.category.DEFAULT"/>
             </intent-filter>
         </service>
+        <!--
         <receiver android:name=".SMSStateReceiver">
             <intent-filter android:priority="2147483647">
                 <action android:name="android.provider.Telephony.SMS_RECEIVED"/>
+                -->
                 <!-- action android:name="android.provider.Telephony.SMS_SENT" / -->
+        <!--
             </intent-filter>
         </receiver>
+-->
         <!--
          <receiver  android:name=".PhoneBroadcastReceiver">
              <intent-filter  android:priority="100" >

@@ -5,12 +5,9 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.location.Location;
-import android.location.LocationListener;
-import android.location.LocationManager;
+
 import android.media.AudioManager;
 import android.os.Binder;
-import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Vibrator;
@@ -25,9 +22,10 @@ import com.android.internal.telephony.ITelephony;
 
 import java.lang.reflect.Method;
 import java.util.Calendar;
+
 import android.support.v4.content.LocalBroadcastManager;
 
-public class SafetyDrivingService extends Service implements Runnable, LocationListener {
+public class SafetyDrivingService extends Service implements Runnable {
 
     private static final String TAG = "SafetyDrivingService";
     // 시작 ID
@@ -36,18 +34,14 @@ public class SafetyDrivingService extends Service implements Runnable, LocationL
     private Handler mHandler;
     // 서비스 동작 여부 flag
     private boolean mIsRunning;
-    // GPS 모듈 사용 여부 flag
-    private boolean mIsGPSRunning;
+
     // SafetyDriving 모드 여부 flag
-    private boolean mIsSafetyDriving;
+    private static boolean mIsSafetyDriving;
     // Dismiss 여부
     private boolean mIsDismiss;
 
-    private LocationManager mLocationManager;
-
-    // To manage phone calling
-    private TelephonyManager mTelephonyManager;
-    private MyPhoneStateListener mPhoneListener;
+    private PluginRegister mPlugin;
+    private PluginTargetRegister mTargetPlugin;
 
     // 타이머 설정
     private static final int TIMER_PERIOD = 5 * 1000;
@@ -56,11 +50,14 @@ public class SafetyDrivingService extends Service implements Runnable, LocationL
     private QDNotification mNote;
 
     private Context mContext;
-    public static final String PREFS_NAME = "SoundSetting";
+    public static
+
+    final String PREFS_NAME = "SoundSetting";
 
     public boolean getIsRunning() {
         return mIsRunning;
     }
+
     // 서비스를 생성할 때 호출
     public void onCreate() {
         Log.d(TAG, "onCreate : Service Creaeted");
@@ -68,14 +65,17 @@ public class SafetyDrivingService extends Service implements Runnable, LocationL
         mContext = this;
         initialize(mContext);
         mHandler = new Handler();
+
         mIsRunning = false;
-        mIsGPSRunning = false;
         mIsDismiss = false;
         mIsSafetyDriving = false;
-        mLocationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+
+        mPlugin = new PluginRegister(mContext);
+        mPlugin.initService();
+        mTargetPlugin = new PluginTargetRegister(mContext);
+
         mNote = new QDNotification(this);
-        mPhoneListener = new MyPhoneStateListener();
-        mTelephonyManager = (TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+
     }
 
     // 서비스 시작할 때 호출. Background에서의 처리가 시작됨.
@@ -104,8 +104,7 @@ public class SafetyDrivingService extends Service implements Runnable, LocationL
         // postDelayed는 바로 정지되지 않고 다음 번 run 메소드를 호출
         Log.d(TAG, "onDestroy()");
         mIsRunning = false;
-        mLocationManager.removeUpdates(this);
-        mIsGPSRunning = false;
+        mPlugin.cancelService();
     }
 
     // 서비스 처리
@@ -114,10 +113,9 @@ public class SafetyDrivingService extends Service implements Runnable, LocationL
 
         // Preference Check
         SharedPreferences mPrefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
-        Log.d(TAG, "run() auto_block= " + mPrefs.getBoolean("auto_block", false) +  "mIsgpSRunning = "+  mIsGPSRunning);
-        if (mPrefs.getBoolean("auto_block", false) == true && !mIsGPSRunning) {
-            mLocationManager.requestLocationUpdates("gps", TIMER_PERIOD, 10, this);//위치정보가 변경되면 알려줌
-            mIsGPSRunning = true;
+        Log.d(TAG, "run() auto_block= " + mPrefs.getBoolean("auto_block", false) + "mIsgpSRunning = " + mPlugin.isServiceRunning());
+        if (mPrefs.getBoolean("auto_block", false) == true && !mPlugin.isServiceRunning()) {
+            mPlugin.requestService();
         }
         mHandler.postDelayed(this, TIMER_PERIOD);
     }
@@ -136,7 +134,7 @@ public class SafetyDrivingService extends Service implements Runnable, LocationL
                 mPrefs.getBoolean("auto_block", false) == true) {
             Log.d(TAG, "TrunOnsafetyDrivingMode block_call in");
             setMute(mContext);
-            mTelephonyManager.listen(mPhoneListener, PhoneStateListener.LISTEN_CALL_STATE);
+            mTargetPlugin.registerTargetListener();
         }
         sendMessage(1);
     }
@@ -148,39 +146,10 @@ public class SafetyDrivingService extends Service implements Runnable, LocationL
         Toast.makeText(this, "안전 운전모드를 종료합니다", Toast.LENGTH_SHORT).show();
         ((Vibrator) getSystemService(Context.VIBRATOR_SERVICE)).vibrate(200);
         restoreSetting(mContext);
-        mTelephonyManager.listen(mPhoneListener, PhoneStateListener.LISTEN_NONE);
+        mTargetPlugin.unregisterTargetListener();
 
         mIsSafetyDriving = false;
         sendMessage(0);
-    }
-
-    public void onLocationChanged(Location location) {
-        // Check the preference for Auto Blocking
-        SharedPreferences mPrefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
-        // To check if the velocity of user is high enough
-        float speed = (float) (location.getSpeed() * 3.6);
-
-        if (	mPrefs.getBoolean("auto_block", false) == true	// Preference for Auto blocking
-                &&	speed >= VELOCITY_FOR_DRIVING_MODE				// if the velocity is higher than 15km/h
-                &&	!mIsSafetyDriving
-                ) {
-            Intent intent = new Intent(SafetyDrivingService.this, SafetyModeActivity.class);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            turnOnSafetyDrivingMode();
-            startActivity(intent);
-        }
-    }
-
-    public void onProviderDisabled(String provider) {
-
-    }
-
-    public void onProviderEnabled(String provider) {
-
-    }
-
-    public void onStatusChanged(String provider, int status, Bundle extras) {
-
     }
 
     public class MyPhoneStateListener extends PhoneStateListener {
@@ -255,7 +224,7 @@ public class SafetyDrivingService extends Service implements Runnable, LocationL
     }
     @Override
     public IBinder onBind(Intent intent) {
-        Log.d(TAG,"onBind()");
+        Log.d(TAG, "onBind()");
 
         return binder;
     }
@@ -314,5 +283,9 @@ public class SafetyDrivingService extends Service implements Runnable, LocationL
         }
         if(mode == AudioManager.RINGER_MODE_NORMAL && volume > 0)
             audioManager.setStreamVolume(AudioManager.STREAM_RING, volume, AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE);
+    }
+
+    public static boolean ismIsSafetyDriving() {
+        return mIsSafetyDriving;
     }
 }
